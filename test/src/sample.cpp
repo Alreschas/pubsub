@@ -5,126 +5,133 @@
 
 std::mutex mtx;
 
-class dummyNetworkSender{
+class alldataSubscriber {
 public:
-    dummyNetworkSender() {
-        RealtimeDataCommunicationClient client;
-        client.subscribe(&dummyNetworkSender::cbFunc, this);
+    alldataSubscriber() {
+        PubSubAll client;
+        client.subscribe(&alldataSubscriber::cbFunc1, this, 10, 1);
+        client.subscribe(&alldataSubscriber::cbFunc2, this, 10, 2);
     }
 
-
-    void cbFunc(std::string topic,std::string msg){
+    void cbFunc1(std::string topic, std::string msg) {
         std::lock_guard<std::mutex> lk(mtx);
-        std::cout<<"dummyNetworkSender : "<<topic<<" "<<msg<<std::endl;
-        //ここで、サーバに送信
+        std::cout << "\033[31m" << "all sub1 : " << topic << " " << msg << "\033[m" << std::endl;
+    }
+    void cbFunc2(std::string topic, std::string msg) {
+        std::lock_guard<std::mutex> lk(mtx);
+        std::cout << "\033[32m" << "all sub2 : " << topic << " " << msg << "\033[m" << std::endl;
     }
 
 };
 
-class dummyNetworkReceiver{
+class alldataPublisher {
 public:
-    dummyNetworkReceiver() {
-        th = std::thread(&dummyNetworkReceiver::receiveThread,this);
+    alldataPublisher() {
+        th = std::thread(&alldataPublisher::receiveThread, this);
     }
 
-    ~dummyNetworkReceiver(){
-        if(th.joinable()){
+    ~alldataPublisher() {
+        if (th.joinable()) {
             th.join();
         }
     }
 
-
-    void receiveThread(){
-        RealtimeDataCommunicationClient client;
-        for (int idx = 0; idx < 10; ++idx) {
-            client.publish("/string", "received");
-            client.publish("/int", "10");
-            client.publish("/double", "12.0");
-        }
-    }
-
-
-    std::thread th;
-};
-
-class TestSender{
-public:
-    TestSender(){
-        th = std::thread(&TestSender::sendThread,this);
-    }
-
-    ~TestSender(){
-        if(th.joinable()){
+    void wait() {
+        if (th.joinable()) {
             th.join();
         }
     }
 
-    void sendThread(){
-        for (int idx = 0; idx < 10; ++idx) {
-            RealtimeDataClient br;
-            br.publish<std::string>("/string", "this is a pen.");
-            br.publish<int>("/int", 1);
-            br.publish<double>("/double", 1.2);
-
-            usleep(1000);
+    void receiveThread() {
+        PubSubAll client;
+        for (int idx = 0; idx < 1; ++idx) {
+            client.publish("/str", "published from alldata publisher", 1);
+            client.publish("/int", "9999", 1);
+            client.publish("/dbl", "9999.9999", 1);
+            usleep(100000);
         }
     }
 
     std::thread th;
 };
 
-class TestReceiver{
+class TestSender {
 public:
-    TestReceiver(){
-        RealtimeDataClient br;
-        br.subscribe("/int", &TestReceiver::intReceiver, this, 4);
-        br.subscribe("/string", &TestReceiver::stringReceiver, this, 4);
-        br.subscribe("/double", &TestReceiver::doubleReceiver, this, 4);
+    TestSender() {
+        th = std::thread(&TestSender::sendThread, this);
     }
 
-    void exec(){
-
-        //サーバが受信
-        RealtimeDataCommunicationClient client;
-        client.publish("/task", "this is a ship.");
-        client.publish("/task", "these are two ships.");
-        client.publish("/task", "these are three ships.");
-        client.publish("/task", "these are four ships.");
-
+    ~TestSender() {
+        if (th.joinable()) {
+            th.join();
+        }
     }
 
-    void intReceiver(int a){
-        mtx.lock();
-        std::cout<<"intReceiver "<<a<<std::endl;
-        mtx.unlock();
-        usleep(100000);
+    void wait() {
+        if (th.joinable()) {
+            th.join();
+        }
     }
 
-    void stringReceiver(std::string a){
-        mtx.lock();
-        std::cout<<"stringReceiver "<<a<<std::endl;
-        mtx.unlock();
-        usleep(200000);
+    void sendThread() {
+        PubSub client;
+        auto str_publisher = client.getPublisher<std::string>("/str");
+        auto dbl_publisher = client.getPublisher<double>("/dbl");
+        auto int_publisher = client.getPublisher<int>("/int");
+
+        for (int idx = 0; idx < 1; ++idx) {
+            str_publisher.publish("published from test sender.");
+            int_publisher.publish(12345);
+            dbl_publisher.publish(1.2345);
+
+            usleep(100000);
+        }
     }
 
-    void doubleReceiver(double a){
-        mtx.lock();
-        std::cout<<"doubleReceiver "<<a<<std::endl;
-        mtx.unlock();
-        usleep(300000);
-    }
+    std::thread th;
 };
 
+class TestReceiver {
+public:
+    TestReceiver() {
+        PubSub client;
+        client.subscribe("/int", &TestReceiver::intSubscriber, this, 4);
+        client.subscribe("/str", &TestReceiver::stringSubscriber, this, 4);
+        client.subscribe("/dbl", &TestReceiver::doubleSubscriber, this, 4);
+    }
+
+    void intSubscriber(int a) {
+        mtx.lock();
+        std::cout << "\033[33m" << "int sub  : " << a << "\033[m" << std::endl;
+        mtx.unlock();
+    }
+
+    void stringSubscriber(std::string a) {
+        mtx.lock();
+        std::cout << "\033[33m" << "str sub  : " << a << "\033[m" << std::endl;
+        mtx.unlock();
+    }
+
+    void doubleSubscriber(double a) {
+        mtx.lock();
+        std::cout << "\033[33m" << "dbl sub  : " << a << "\033[m" << std::endl;
+        mtx.unlock();
+    }
+};
 
 int main() {
     Broker::run();
 
-    dummyNetworkSender ws_sender;
+    alldataSubscriber ws_sender;
     TestReceiver receiver;
 
-    dummyNetworkReceiver ws_receiver;
-    TestSender sender;
+    std::cout << "===== network receive demo===== " << std::endl;
+    alldataPublisher ws_receiver;
+    ws_receiver.wait();
 
+    std::cout << "=====  topic publishing demo ===== " << std::endl;
+    TestSender sender;
+    sender.wait();
 
     usleep(1000000);
     Broker::stop();

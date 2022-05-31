@@ -3,9 +3,25 @@
 #include "singleton.hpp"
 #include "broker.hpp"
 
-class RealtimeDataClient {
+template<class DataType>
+class Publisher {
 public:
-    RealtimeDataClient() {
+    Publisher(std::string topic) :
+            topic(topic) {
+
+    }
+
+    void publish(const DataType &value) {
+        Broker::getInstance().publish(topic, value);
+    }
+
+private:
+    std::string topic;
+};
+
+class PubSub {
+public:
+    PubSub() {
 
     }
 
@@ -15,20 +31,21 @@ public:
     }
 
     template<class DataType>
-    void publish(std::string topic, const DataType &value) {
-        Broker::getInstance().publish(topic, value);
+    Publisher<DataType> getPublisher(std::string topic) {
+        return Publisher<DataType>(topic);
     }
+
 };
 
-class RealtimeDataCommunicationClient{
+class PubSubAll {
 public:
-    RealtimeDataCommunicationClient(){
+    PubSubAll() {
 
     }
 
     template<class ClassType>
-    void subscribe(void(ClassType::*func_ptr)(std::string,std::string), ClassType *caller, size_t max_queue_size = 0) {
-        Broker::getInstance().addFunc(func_ptr, caller, max_queue_size);
+    void subscribe(void (ClassType::*func_ptr)(std::string, std::string), ClassType *caller, size_t max_queue_size = 0, int sender_id = -1) {
+        Broker::getInstance().addFunc(func_ptr, caller, max_queue_size, sender_id);
     }
 
     template<class DataType, class SerializerType>
@@ -36,7 +53,7 @@ public:
         Broker::getInstance().setSerializer<DataType, SerializerType>(topic);
     }
 
-    void publish(std::string topic, const std::string &msg) {
-        Broker::getInstance().publish_msg(topic, msg);
+    void publish(std::string topic, const std::string &msg, int sender_id) {
+        Broker::getInstance().publish_msg(topic, msg, sender_id);
     }
 };

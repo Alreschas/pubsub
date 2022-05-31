@@ -23,13 +23,14 @@ public:
     /**
      * シリアライザを利用する場合の、コールバック関数登録
      */
-    void addFunc(std::function<void(std::string)> func) {
+    void addFunc(std::function<void(std::string)> func,int sender_id) {
         FuncInfo_generalized info;
         info.func = func;
+        info.sender_id = sender_id;
         funcs_generalized.push_back(info);
     }
 
-    virtual void add_msg(const std::string &msg) = 0;
+    virtual void add_msg(const std::string &msg,int sender_id) = 0;
 
 protected:
 
@@ -37,6 +38,7 @@ protected:
      *
      */
     struct FuncInfo_generalized {
+        int sender_id = -1;
         std::function<void(std::string)> func;  //!< コールバック関数
     };
     std::vector<FuncInfo_generalized> funcs_generalized;
@@ -44,13 +46,18 @@ protected:
 
 template<class ReturnType, class DataType>
 class CallbackFuncs: public CallbackFuncsBase {
+    struct MsgType{
+        DataType data;
+        int sender_id;
+    };
     struct FuncInfo {
-        std::function<ReturnType(DataType)> func;  //!< コールバック関数
+        std::function<ReturnType(MsgType msg)> func;  //!< コールバック関数
         QFuture<ReturnType> future;         //!< コールバック実行結果取得
         unsigned long msg_idx = 0; //!< 次に送信するメッセージのインデックス番号
         size_t max_sque_size = 0;   //!< コールバックメッセージキューの最大サイズ 0だと無限サイズ
     };
     SerializerHolderBase<DataType> *serializer = nullptr;
+
 public:
     CallbackFuncs(size_t max_que_size = 0) :
             max_rque_size(max_que_size) {
@@ -79,6 +86,13 @@ public:
      */
     void add_func(const std::function<ReturnType(DataType)> &in_func, size_t max_que_size = 0) {
         std::lock_guard<std::mutex> lk(mtx);
+        auto lambda = [=](MsgType msg){in_func(msg.data);};
+        FuncInfo info { lambda, QFuture<ReturnType>(), msg_que.size(), max_que_size };
+        funcs.push_back(info);
+    }
+
+    void add_func(const std::function<ReturnType(MsgType)> &in_func, size_t max_que_size = 0) {
+        std::lock_guard<std::mutex> lk(mtx);
         FuncInfo info { in_func, QFuture<ReturnType>(), msg_que.size(), max_que_size };
         funcs.push_back(info);
     }
@@ -86,9 +100,13 @@ public:
     /**
      * コールバックメッセージを保存する
      */
-    void add_data(const DataType &data) {
+    void add_data(const DataType &data,int sender_id = -1) {
         std::lock_guard<std::mutex> lk(mtx);
-        msg_que.push_back(data);
+
+        MsgType msg;
+        msg.data = data;
+        msg.sender_id = sender_id;
+        msg_que.push_back(msg);
         if (max_rque_size > 0 && msg_que.size() > max_rque_size) {
             msg_que.pop_front(); //受信キューのサイズを超えてしまった場合は、古いものを一つ破棄する
 
@@ -129,8 +147,8 @@ public:
             }
 
             if (func.msg_idx < msg_que.size()) {
-                auto data = msg_que[func.msg_idx];
-                func.future = QtConcurrent::run(QThreadPool::globalInstance(), func.func, data);
+                auto msg = msg_que[func.msg_idx];
+                func.future = QtConcurrent::run(QThreadPool::globalInstance(), func.func, msg);
                 func.msg_idx++;
                 processing = true;
             }
@@ -138,22 +156,22 @@ public:
         return processing;
     }
 
-    void add_msg(const std::string &msg){
+    void add_msg(const std::string &msg,int sender_id){
         if (serializer) {
             auto data = serializer->deserialize(msg);
-            add_data(data);
+            add_data(data,sender_id);
         }
     }
 
-    ReturnType default_callback(DataType data) {
+    ReturnType default_callback(MsgType msg) {
         if(!serializer){
             return ReturnType();
         }
-        std::string msg = serializer->serialize(data);
+        std::string data = serializer->serialize(msg.data);
 
         for (auto &func : funcs_generalized) {
-            if (func.func) {
-                func.func(msg);
+            if (func.func&&func.sender_id != msg.sender_id) {
+                func.func(data);
             }
         }
         return ReturnType();
@@ -162,7 +180,7 @@ public:
 private:
     std::mutex mtx;
     std::vector<FuncInfo> funcs;
-    std::deque<DataType> msg_que; //!< メッセージ受信キュー
+    std::deque<MsgType> msg_que; //!< メッセージ受信キュー
     size_t max_rque_size = 0; //!< メッセージ受信キューの最大サイズ 0だと、無限サイズ
 };
 
@@ -189,8 +207,8 @@ public:
             func->template setSerializer<defaultSerializer>();
             topic_funcs.emplace(topic, func);
             for (auto &gfunc : generalized_funcs) {
-                auto functional = std::bind(gfunc, topic, std::placeholders::_1);
-                func->addFunc(functional);
+                auto functional = std::bind(gfunc.first, topic, std::placeholders::_1);
+                func->addFunc(functional,gfunc.second);
             }
         } else {
             func = cast<void, DataType>(topic_funcs[topic]);
@@ -225,11 +243,11 @@ public:
     /**
      * シリアライザ付きのコールバック関数を登録する
      */
-    void addFunc(std::function<void(std::string, std::string)> func) {
-        generalized_funcs.push_back(func);
+    void addFunc(std::function<void(std::string, std::string)> func,int sender_id) {
+        generalized_funcs.push_back(std::make_pair(func,sender_id));
         for (auto topic_func : topic_funcs) {
             auto functional = std::bind(func, topic_func.first, std::placeholders::_1);
-            topic_func.second->addFunc(functional);
+            topic_func.second->addFunc(functional,sender_id);
         }
     }
 
@@ -244,9 +262,9 @@ public:
         }
     }
 
-    void add_msg(std::string topic, const std::string &msg) {
+    void add_msg(std::string topic, const std::string &msg,int sender_id) {
         if (topic_funcs.count(topic) != 0) {
-            topic_funcs[topic]->add_msg(msg);
+            topic_funcs[topic]->add_msg(msg,sender_id);
         }
     }
 
@@ -273,5 +291,5 @@ private:
 private:
     std::map<std::string, CallbackFuncsBase*> topic_funcs;
 
-    std::vector<std::function<void(std::string, std::string)>> generalized_funcs;
+    std::vector<std::pair<std::function<void(std::string, std::string)>,int>> generalized_funcs;
 };

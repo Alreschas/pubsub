@@ -45,18 +45,18 @@ public:
         cond.notify_one();
     }
 
-    void publish_msg(std::string topic, const std::string &msg) {
+    void publish_msg(std::string topic, const std::string &msg,int sender_id) {
         std::lock_guard<std::mutex> lk(mtx);
 
-        func_buffer.add_msg(topic, msg);
+        func_buffer.add_msg(topic, msg,sender_id);
 
         cond.notify_one();
     }
 
     template<class ClassType>
-    void addFunc(void(ClassType::*func_ptr)(std::string,std::string), ClassType *caller, size_t max_queue_size = 0) {
+    void addFunc(void(ClassType::*func_ptr)(std::string,std::string), ClassType *caller, size_t max_queue_size = 0,int sender_id = -1) {
         auto functional = std::bind(func_ptr, caller, std::placeholders::_1, std::placeholders::_2);
-        func_buffer.addFunc(functional);
+        func_buffer.addFunc(functional,sender_id);
     }
 
     template<class DataType, class SerializerType>
