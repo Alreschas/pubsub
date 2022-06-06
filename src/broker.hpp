@@ -9,8 +9,9 @@
 #include <thread>
 #include <unistd.h>
 
-#include "callback_funcs.hpp"
+#include "topic_func_pair_list.hpp"
 
+namespace pubsub {
 class BrokerCore {
 public:
     void run() {
@@ -28,16 +29,41 @@ public:
         }
     }
 
-    template<class ClassType, class DataType>
-    void subscribe(std::string topic, void (ClassType::*func_ptr)(DataType), ClassType *caller, size_t max_que_size = 0) {
+    template<class ClassType, class DataTypeWithConstAndReference>
+    unsigned int subscribe(const std::string &topic, void (ClassType::*func_ptr)(DataTypeWithConstAndReference), ClassType *caller, size_t max_que_size = 0) {
         std::lock_guard<std::mutex> lk(mtx);
-        std::function<void(DataType)> functional = std::bind(func_ptr, caller, std::placeholders::_1);
+        std::function<void(DataTypeWithConstAndReference)> functional = std::bind(func_ptr, caller, std::placeholders::_1);
 
-        func_buffer.add(topic, functional, max_que_size);
+        return func_buffer.add(topic, functional, max_que_size);
     }
 
     template<class DataType>
-    void publish(std::string topic, const DataType &value) {
+    bool getLatestData(const std::string &topic, DataType &data) {
+        return func_buffer.getLatestData<DataType>(topic, data);
+    }
+
+    void close_subscribe(const std::string &topic, unsigned int handler) {
+        std::lock_guard<std::mutex> lk(mtx);
+        func_buffer.close_func(topic, handler);
+    }
+
+    void pause_subscribe(const std::string &topic, unsigned int handler) {
+        std::lock_guard<std::mutex> lk(mtx);
+        func_buffer.pause_func(topic, handler);
+    }
+
+    void resume_subscribe(const std::string &topic, unsigned int handler) {
+        std::lock_guard<std::mutex> lk(mtx);
+        func_buffer.resume_func(topic, handler);
+    }
+
+    void close_subscribe_serialized(unsigned int handler) {
+        std::lock_guard<std::mutex> lk(mtx);
+        func_buffer.close_func_serialized(handler);
+    }
+
+    template<class DataType>
+    void publish(const std::string &topic, const DataType &value) {
         std::lock_guard<std::mutex> lk(mtx);
 
         func_buffer.add_data(topic, value);
@@ -45,7 +71,7 @@ public:
         cond.notify_one();
     }
 
-    void publish_msg(std::string topic, const std::string &msg,int sender_id) {
+    void publish_msg(const std::string &topic, const std::string &msg,int sender_id) {
         std::lock_guard<std::mutex> lk(mtx);
 
         func_buffer.add_msg(topic, msg,sender_id);
@@ -54,13 +80,13 @@ public:
     }
 
     template<class ClassType>
-    void addFunc(void(ClassType::*func_ptr)(std::string,std::string), ClassType *caller, size_t max_queue_size = 0,int sender_id = -1) {
+    int addFunc(void(ClassType::*func_ptr)(const std::string&,const std::string&), ClassType *caller, size_t max_queue_size = 0,int sender_id = -1) {
         auto functional = std::bind(func_ptr, caller, std::placeholders::_1, std::placeholders::_2);
-        func_buffer.addFunc(functional,sender_id);
+        return func_buffer.addFunc(functional,sender_id);
     }
 
     template<class DataType, class SerializerType>
-    void setSerializer(std::string topic) {
+    void setSerializer(const std::string &topic) {
         func_buffer.setSerializer<DataType, SerializerType>(topic);
     }
 
@@ -92,7 +118,7 @@ private:
     std::mutex mtx;
     std::condition_variable cond;
 
-    CallbackFuncsOfTopics func_buffer;
+    TopicFuncPairList func_buffer;
 
     bool stop_request = false;
 };
@@ -117,3 +143,4 @@ private:
     Broker() = delete;
     ~Broker() = delete;
 };
+}

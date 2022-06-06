@@ -1,6 +1,6 @@
 #include <iostream>
 
-#include "client.hpp"
+#include "pubsub.hpp"
 #include "broker.hpp"
 
 std::mutex mtx;
@@ -8,20 +8,22 @@ std::mutex mtx;
 class alldataSubscriber {
 public:
     alldataSubscriber() {
-        PubSubAll client;
-        client.subscribe(&alldataSubscriber::cbFunc1, this, 10, 1);
-        client.subscribe(&alldataSubscriber::cbFunc2, this, 10, 2);
+        sub1 = pubsub::extra_api::subscribe_serialized(&alldataSubscriber::cbFunc1, this, 10, 1);
+        sub2 = pubsub::extra_api::subscribe_serialized(&alldataSubscriber::cbFunc2, this, 10, 2);
     }
 
-    void cbFunc1(std::string topic, std::string msg) {
+    void cbFunc1(const std::string &topic, const std::string &msg) {
         std::lock_guard<std::mutex> lk(mtx);
         std::cout << "\033[31m" << "all sub1 : " << topic << " " << msg << "\033[m" << std::endl;
     }
-    void cbFunc2(std::string topic, std::string msg) {
+    void cbFunc2(const std::string &topic, const std::string &msg) {
         std::lock_guard<std::mutex> lk(mtx);
         std::cout << "\033[32m" << "all sub2 : " << topic << " " << msg << "\033[m" << std::endl;
     }
 
+private:
+    pubsub::Subscriber_serialized sub1;
+    pubsub::Subscriber_serialized sub2;
 };
 
 class alldataPublisher {
@@ -43,11 +45,14 @@ public:
     }
 
     void receiveThread() {
-        PubSubAll client;
+        pubsub::Publisher<std::string> str_pub("/str");
+        pubsub::Publisher<int>         int_pub("/int");
+        pubsub::Publisher<double>      dbl_pub("/dbl");
+
         for (int idx = 0; idx < 1; ++idx) {
-            client.publish("/str", "published from alldata publisher", 1);
-            client.publish("/int", "9999", 1);
-            client.publish("/dbl", "9999.9999", 1);
+            pubsub::extra_api::publish_serialized("/str", "published from alldata publisher", 1);
+            pubsub::extra_api::publish_serialized("/int", "9999", 1);
+            pubsub::extra_api::publish_serialized("/dbl", "9999.9999", 1);
             usleep(100000);
         }
     }
@@ -74,15 +79,14 @@ public:
     }
 
     void sendThread() {
-        PubSub client;
-        auto str_publisher = client.getPublisher<std::string>("/str");
-        auto dbl_publisher = client.getPublisher<double>("/dbl");
-        auto int_publisher = client.getPublisher<int>("/int");
+        pubsub::Publisher<std::string> str_pub("/str");
+        pubsub::Publisher<int>         int_pub("/int");
+        pubsub::Publisher<double>      dbl_pub("/dbl");
 
-        for (int idx = 0; idx < 1; ++idx) {
-            str_publisher.publish("published from test sender.");
-            int_publisher.publish(12345);
-            dbl_publisher.publish(1.2345);
+        for (int idx = 0; idx < 10; ++idx) {
+            str_pub.publish("published from test sender."+std::to_string(idx));
+            int_pub.publish(10+idx);
+            dbl_pub.publish(10.1+idx);
 
             usleep(100000);
         }
@@ -94,33 +98,40 @@ public:
 class TestReceiver {
 public:
     TestReceiver() {
-        PubSub client;
-        client.subscribe("/int", &TestReceiver::intSubscriber, this, 4);
-        client.subscribe("/str", &TestReceiver::stringSubscriber, this, 4);
-        client.subscribe("/dbl", &TestReceiver::doubleSubscriber, this, 4);
+        intsub = pubsub::api::subscribe("/int", &TestReceiver::intSubscriber, this, 4);
+        strsub = pubsub::api::subscribe("/str", &TestReceiver::stringSubscriber, this, 4);
+        dblsub = pubsub::api::subscribe("/dbl", &TestReceiver::doubleSubscriber, this, 4);
     }
 
-    void intSubscriber(int a) {
+    void intSubscriber(const int &a) {
         mtx.lock();
         std::cout << "\033[33m" << "int sub  : " << a << "\033[m" << std::endl;
         mtx.unlock();
+        intsub.pause();
     }
 
-    void stringSubscriber(std::string a) {
+    void stringSubscriber(std::string &a) {
         mtx.lock();
         std::cout << "\033[33m" << "str sub  : " << a << "\033[m" << std::endl;
         mtx.unlock();
+        strsub.pause();
     }
 
     void doubleSubscriber(double a) {
         mtx.lock();
         std::cout << "\033[33m" << "dbl sub  : " << a << "\033[m" << std::endl;
         mtx.unlock();
+        dblsub.pause();
     }
+
+private:
+    pubsub::Subscriber intsub;
+    pubsub::Subscriber dblsub;
+    pubsub::Subscriber strsub;
 };
 
 int main() {
-    Broker::run();
+    pubsub::Broker::run();
 
     alldataSubscriber ws_sender;
     TestReceiver receiver;
@@ -133,8 +144,12 @@ int main() {
     TestSender sender;
     sender.wait();
 
-    usleep(1000000);
-    Broker::stop();
+    std::cout << "=====  get latestdata demo ===== " << std::endl;
+    int data = 0;
+    pubsub::api::getLatestData<int>("/int", data);
+    std::cout<<"latest int data: "<<data<<std::endl;
+
+    pubsub::Broker::stop();
 
     return 0;
 }

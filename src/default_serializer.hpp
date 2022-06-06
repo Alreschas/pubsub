@@ -11,6 +11,7 @@
 
 #include "callback_funcs.hpp"
 
+namespace pubsub {
 class defaultSerializer {
 public:
     template<class DataType>
@@ -42,4 +43,5 @@ int defaultSerializer::deserialize<int>(const std::string &msg) {
 template<>
 double defaultSerializer::deserialize<double>(const std::string &msg) {
     return std::stod(msg);
+}
 }
