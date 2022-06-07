@@ -14,6 +14,15 @@ namespace pubsub {
  * トピックとコールバック関数のリスト
  */
 class TopicFuncPairList {
+    /**
+     * シリアライズされたデータを扱う関数を格納する
+     */
+    struct FuncSerializedData{
+        std::function<void(std::string, std::string)> func;
+        int sender_id; //!< 送信してきた相手に、再度送信するのを防ぐためのID
+        unsigned int handler; //!< 関数を停止したりするためのハンドラ
+    };
+
 public:
 
     ~TopicFuncPairList() {
@@ -26,70 +35,34 @@ public:
     }
 
     /**
-     * シリアライズされたデータを扱う関数
-     */
-    struct FuncSerializedData{
-        std::function<void(std::string, std::string)> func;
-        int sender_id; //!< 送信してきた相手に、再度送信するのを防ぐためのID
-        unsigned int handler; //!< 関数を停止したりするためのハンドラ
-    };
-
-    template<class DataType>
-    CallbackFuncs<void, DataType> * createOrGetFunc(const std::string &topic){
-        CallbackFuncs<void, DataType> *func = nullptr;
-        if (topic_funcs.count(topic) == 0) {
-            func = new CallbackFuncs<void, DataType>();
-            func->template setSerializer<defaultSerializer>();
-            topic_funcs.emplace(topic, func);
-            for (auto &gfunc : generalized_funcs) {
-                auto functional = std::bind(gfunc.func, topic, std::placeholders::_1);
-                func->addFunc(functional, gfunc.sender_id, gfunc.handler);
-            }
-        } else {
-            func = cast<void, DataType>(topic_funcs[topic]);
-        }
-        return func;
-    }
-
-    template<class DataType>
-    CallbackFuncs<void, DataType> * getFunc(const std::string &topic){
-        CallbackFuncs<void, DataType> *func = nullptr;
-        if (topic_funcs.count(topic) != 0) {
-            func = cast<void, DataType>(topic_funcs[topic]);
-        }
-        return func;
-    }
-
-
-    /**
      * コールバック関数を登録する
      */
     template<class DataTypeWithConstAndReference>
-    unsigned short add(const std::string &topic, const std::function<void(DataTypeWithConstAndReference)> &in_func, size_t max_que_size = 0) {
+    unsigned short subscribe(const std::string &topic, const std::function<void(DataTypeWithConstAndReference)> &in_func, size_t max_que_size = 0) {
         unsigned short ret = 0;
         using DataType = typename std::remove_const<typename std::remove_reference<DataTypeWithConstAndReference>::type>::type;
         auto *func = createOrGetFunc<DataType>(topic);
         if (func) {
-            ret = func->add_func(in_func, max_que_size);
+            ret = func->subscribe(in_func, max_que_size);
         }
         return ret;
     }
 
-    void close_func(const std::string &topic, unsigned int handler){
+    void close_subscribe(const std::string &topic, unsigned int handler){
         if (topic_funcs.count(topic) != 0) {
-            topic_funcs[topic]->remove_func(handler);
+            topic_funcs[topic]->close_subscribe(handler);
         }
     }
 
-    void pause_func(const std::string &topic, unsigned int handler){
+    void pause_subscribe(const std::string &topic, unsigned int handler){
         if (topic_funcs.count(topic) != 0) {
-            topic_funcs[topic]->pause_func(handler);
+            topic_funcs[topic]->pause_subscribe(handler);
         }
     }
 
-    void resume_func(const std::string &topic, unsigned int handler){
+    void resume_subscribe(const std::string &topic, unsigned int handler){
         if (topic_funcs.count(topic) != 0) {
-            topic_funcs[topic]->resume_func(handler);
+            topic_funcs[topic]->resume_subscribe(handler);
         }
     }
 
@@ -103,6 +76,31 @@ public:
     }
 
     /**
+     * シリアライザ付きのコールバック関数を登録する
+     */
+    int subscribe_serialized(std::function<void(const std::string&, const std::string&)> func, int sender_id) {
+        FuncSerializedData func_info { func, sender_id, ++cur_handler };
+        generalized_funcs.push_back(func_info);
+        for (auto topic_func : topic_funcs) {
+            auto functional = std::bind(func_info.func, topic_func.first, std::placeholders::_1);
+            topic_func.second->subscribe_serialized(functional, func_info.sender_id, func_info.handler);
+        }
+        return func_info.handler;
+    }
+
+    void close_subscribe_serialized(unsigned int handler) {
+        for (auto topic_func : topic_funcs) {
+            topic_func.second->close_subscribe_serialized(handler);
+        }
+
+        auto itr = std::find_if(generalized_funcs.begin(), generalized_funcs.end(), [&](const FuncSerializedData &info) {return info.handler == handler;});
+        if (itr != generalized_funcs.end()) {
+            generalized_funcs.erase(itr);
+        }
+    }
+
+
+    /**
      * シリアライザを登録する
      */
     template<class DataType, class SerializerType>
@@ -113,47 +111,23 @@ public:
         }
     }
 
-    /**
-     * シリアライザ付きのコールバック関数を登録する
-     */
-    int  addFunc(std::function<void(const std::string&, const std::string&)> func, int sender_id) {
-        FuncSerializedData func_info { func, sender_id, ++cur_handler };
-        generalized_funcs.push_back(func_info);
-        for (auto topic_func : topic_funcs) {
-            auto functional = std::bind(func_info.func, topic_func.first, std::placeholders::_1);
-            topic_func.second->addFunc(functional, func_info.sender_id, func_info.handler);
-        }
-        return func_info.handler;
-    }
-
-    void close_func_serialized(unsigned int handler) {
-        for (auto topic_func : topic_funcs) {
-            topic_func.second->removeFunc(handler);
-        }
-
-        auto itr = std::find_if(generalized_funcs.begin(), generalized_funcs.end(), [&](const FuncSerializedData &info) {return info.handler == handler;});
-        if (itr != generalized_funcs.end()) {
-            generalized_funcs.erase(itr);
-        }
-    }
 
     /**
      * データを更新する
      */
     template<class DataType>
-    void add_data(const std::string &topic, const DataType &data) {
+    void publish(const std::string &topic, const DataType &data) {
         CallbackFuncs<void, DataType> *func = createOrGetFunc<DataType>(topic);
         if (func) {
-            func->add_data(data);
+            func->publish(data);
         }
     }
 
-    void add_msg(const std::string &topic, const std::string &msg,int sender_id) {
+    void publish_serialized(const std::string &topic, const std::string &msg,int sender_id) {
         if (topic_funcs.count(topic) != 0) {
-            topic_funcs[topic]->add_msg(msg,sender_id);
+            topic_funcs[topic]->publish_serialized(msg,sender_id);
         }
     }
-
 
     /**
      * コールバック関数を、最大一回実行する。
@@ -168,6 +142,33 @@ public:
     }
 
 private:
+    template<class DataType>
+    CallbackFuncs<void, DataType> * createOrGetFunc(const std::string &topic){
+        CallbackFuncs<void, DataType> *func = nullptr;
+        if (topic_funcs.count(topic) == 0) {
+            func = new CallbackFuncs<void, DataType>();
+            func->template setSerializer<defaultSerializer>();
+            topic_funcs.emplace(topic, func);
+            for (auto &gfunc : generalized_funcs) {
+                auto functional = std::bind(gfunc.func, topic, std::placeholders::_1);
+                func->subscribe_serialized(functional, gfunc.sender_id, gfunc.handler);
+            }
+        } else {
+            func = cast<void, DataType>(topic_funcs[topic]);
+        }
+        return func;
+    }
+
+
+    template<class DataType>
+    CallbackFuncs<void, DataType> * getFunc(const std::string &topic){
+        CallbackFuncs<void, DataType> *func = nullptr;
+        if (topic_funcs.count(topic) != 0) {
+            func = cast<void, DataType>(topic_funcs[topic]);
+        }
+        return func;
+    }
+
     template<class ReturnType, class DataType>
     CallbackFuncs<ReturnType, DataType>* cast(CallbackFuncsBase *base) {
         return dynamic_cast<CallbackFuncs<ReturnType, DataType>*>(base);
@@ -176,8 +177,8 @@ private:
 
 private:
     std::map<std::string, CallbackFuncsBase*> topic_funcs;
-    unsigned int cur_handler = 0;
 
+    unsigned int cur_handler = 0; //!< シリアライズ付きのデータサブスクライブ関数を特定するハンドラ
     std::vector<FuncSerializedData> generalized_funcs;
 };
 }

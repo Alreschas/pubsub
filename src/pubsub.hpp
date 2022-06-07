@@ -133,7 +133,7 @@ public:
 
     template<class ClassType>
     static Subscriber_serialized subscribe_serialized(void (ClassType::*func_ptr)(const std::string&, const std::string&), ClassType *caller, size_t max_queue_size = 0, int sender_id = -1) {
-        int handler = Broker::getInstance().addFunc(func_ptr, caller, max_queue_size, sender_id);
+        int handler = Broker::getInstance().subscribe_serialized(func_ptr, caller, max_queue_size, sender_id);
         return Subscriber_serialized(handler);
     }
 
@@ -143,7 +143,7 @@ public:
     }
 
     static void publish_serialized(std::string topic, const std::string &msg, int sender_id) {
-        Broker::getInstance().publish_msg(topic, msg, sender_id);
+        Broker::getInstance().publish_serialized(topic, msg, sender_id);
     }
 private:
     extra_api() = delete;

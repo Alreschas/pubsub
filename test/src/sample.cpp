@@ -140,14 +140,24 @@ int main() {
     alldataPublisher ws_receiver;
     ws_receiver.wait();
 
+    usleep(1000);
+
     std::cout << "=====  topic publishing demo ===== " << std::endl;
     TestSender sender;
     sender.wait();
+
+    usleep(1000);
 
     std::cout << "=====  get latestdata demo ===== " << std::endl;
     int data = 0;
     pubsub::api::getLatestData<int>("/int", data);
     std::cout<<"latest int data: "<<data<<std::endl;
+
+    usleep(1000);
+
+    std::cout << "=====  new func first receive demo ===== " << std::endl;
+    alldataSubscriber ws_sender2;
+    usleep(1000);
 
     pubsub::Broker::stop();
 

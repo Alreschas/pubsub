@@ -23,6 +23,7 @@ class CallbackFuncs: public CallbackFuncsBase {
         DataType data;
         int sender_id;
     };
+
     struct FuncInfo {
         std::function<ReturnType(MsgType &msg)> func;  //!< コールバック関数
         QFuture<ReturnType> future; //!< コールバック実行結果取得
@@ -34,11 +35,23 @@ class CallbackFuncs: public CallbackFuncsBase {
     SerializerHolderBase<DataType> *serializer = nullptr;
     unsigned int cur_handler_id = 0;
 
+
+    /** データ形式によらないコールバック関数型
+     *
+     */
+    struct FuncInfo_generalized {
+        std::function<void(const std::string&)> func;  //!< コールバック関数
+        int sender_id = -1;
+        unsigned int handler;
+    };
+    std::vector<FuncInfo_generalized> funcs_generalized;
+
+    unsigned int handler_max = std::numeric_limits<unsigned int>::max()/2;
+    unsigned int serialized_func_handler_max = std::numeric_limits<unsigned int>::max();
+
 public:
     CallbackFuncs(size_t max_que_size = 0) :
             max_rque_size(max_que_size) {
-        auto functional = std::bind(&CallbackFuncs<ReturnType, DataType>::default_callback, this, std::placeholders::_1);
-        add_func(functional);
     }
 
     ~CallbackFuncs(){
@@ -53,20 +66,12 @@ public:
         }
     }
 
-    template<class SerializerType>
-    void setSerializer() {
-        if (this->serializer) {
-            delete this->serializer;
-            this->serializer = nullptr;
-        }
-        this->serializer = new SerializerHolder<SerializerType, DataType>();
-    }
 
     /**
      * コールバック関数を登録する
      */
     template<class DataTypeWithRef>
-    unsigned int add_func(const std::function<ReturnType(DataTypeWithRef)> &in_func, size_t max_que_size = 0) {
+    unsigned int subscribe(const std::function<ReturnType(DataTypeWithRef)> &in_func, size_t max_que_size = 0) {
         std::lock_guard<std::mutex> lk(mtx);
         auto lambda = [=](MsgType &msg){in_func(msg.data);};
         FuncInfo info { lambda, QFuture<ReturnType>(), msg_que.size(), max_que_size, ++cur_handler_id  };
@@ -75,15 +80,7 @@ public:
         return info.handler;
     }
 
-    unsigned int add_func(const std::function<ReturnType(MsgType&)> &in_func, size_t max_que_size = 0) {
-        std::lock_guard<std::mutex> lk(mtx);
-        FuncInfo info { in_func, QFuture<ReturnType>(), msg_que.size(), max_que_size, ++cur_handler_id };
-        funcs.push_back(info);
-
-        return info.handler;
-    }
-
-    void remove_func(unsigned int handler) override{
+    void close_subscribe(unsigned int handler) override{
         std::lock_guard<std::mutex> lk(mtx);
         auto itr = std::find_if(funcs.begin(),funcs.end(),[&](FuncInfo& info){return info.handler == handler;});
         if(itr == funcs.end()){
@@ -93,11 +90,10 @@ public:
         funcs.erase(itr);
     }
 
-
     /**
      * 指定された関数のコールバックを停止する
      */
-    void pause_func(unsigned int  handler)override{
+    void pause_subscribe(unsigned int  handler)override{
         std::lock_guard<std::mutex> lk(mtx);
         auto itr = std::find_if(funcs.begin(),funcs.end(),[&](FuncInfo& info){return info.handler == handler;});
         if(itr == funcs.end()){
@@ -110,7 +106,7 @@ public:
     /**
      * 指定された関数のコールバックを再開する
      */
-    void resume_func(unsigned int  handler)override{
+    void resume_subscribe(unsigned int  handler)override{
         std::lock_guard<std::mutex> lk(mtx);
         auto itr = std::find_if(funcs.begin(),funcs.end(),[&](FuncInfo& info){return info.handler == handler;});
         if(itr == funcs.end()){
@@ -128,23 +124,43 @@ public:
         }
         return false;
     }
-    /**
-     * 受信メッセージキューが前に詰められた場合、送信メッセージの開始インデックス番号を調整する。
-     */
-    size_t get_new_sndmsg_idx(size_t prev_idx, size_t deleted_msg_num, size_t msg_que_size, size_t max_sque_size) {
-        //とりあえずは、インデックスの取りうる最小値を入れておく。
-        size_t new_idx = msg_que_size - std::min(max_sque_size, msg_que_size);
-        if (prev_idx > deleted_msg_num + new_idx) {
-            //キューの先頭を削除しても、インデックスの最小値を超えない場合は、そのままインデックスを引く。
-            new_idx = prev_idx - deleted_msg_num;
-        }
-        return new_idx;
+
+
+    void subscribe_serialized(std::function<void(const std::string&)> func, int sender_id, unsigned int handler) override {
+        std::lock_guard<std::mutex> lk(mtx);
+        size_t max_que_size = 0;
+        auto lambda = [=](MsgType &msg) {
+            if (!serializer || msg.sender_id == sender_id) {
+                return;
+            }
+            std::string data = serializer->serialize(msg.data);
+            func(data);
+        };
+        FuncInfo info { lambda, QFuture<ReturnType>(), msg_que.size() - 1, max_que_size, handler_max + handler };
+        funcs.push_back(info);
+
+        return;
     }
+
+    void close_subscribe_serialized(unsigned int handler) override {
+        close_subscribe(handler + handler_max);
+    }
+
+
+    template<class SerializerType>
+    void setSerializer() {
+        if (this->serializer) {
+            delete this->serializer;
+            this->serializer = nullptr;
+        }
+        this->serializer = new SerializerHolder<SerializerType, DataType>();
+    }
+
 
     /**
      * コールバックメッセージを保存する
      */
-    void add_data(const DataType &data,int sender_id = -1) {
+    void publish(const DataType &data,int sender_id = -1) {
         std::lock_guard<std::mutex> lk(mtx);
 
         MsgType msg;
@@ -195,6 +211,13 @@ public:
         }
     }
 
+
+    void publish_serialized(const std::string &msg,int sender_id){
+        if (serializer) {
+            auto data = serializer->deserialize(msg);
+            publish(data,sender_id);
+        }
+    }
 
 
     /**
@@ -250,25 +273,18 @@ public:
         return processing;
     }
 
-    void add_msg(const std::string &msg,int sender_id){
-        if (serializer) {
-            auto data = serializer->deserialize(msg);
-            add_data(data,sender_id);
+private:
+    /**
+     * 受信メッセージキューが前に詰められた場合、送信メッセージの開始インデックス番号を調整する。
+     */
+    size_t get_new_sndmsg_idx(size_t prev_idx, size_t deleted_msg_num, size_t msg_que_size, size_t max_sque_size) {
+        //とりあえずは、インデックスの取りうる最小値を入れておく。
+        size_t new_idx = msg_que_size - std::min(max_sque_size, msg_que_size);
+        if (prev_idx > deleted_msg_num + new_idx) {
+            //キューの先頭を削除しても、インデックスの最小値を超えない場合は、そのままインデックスを引く。
+            new_idx = prev_idx - deleted_msg_num;
         }
-    }
-
-    ReturnType default_callback(MsgType& msg) {
-        if(!serializer){
-            return ReturnType();
-        }
-        std::string data = serializer->serialize(msg.data);
-
-        for (auto &func : funcs_generalized) {
-            if (func.func&&func.sender_id != msg.sender_id) {
-                func.func(data);
-            }
-        }
-        return ReturnType();
+        return new_idx;
     }
 
 private:
