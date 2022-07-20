@@ -89,10 +89,10 @@ public:
      * メッセージを出版する
      */
     template<class DataType>
-    void publish(const std::string &topic, const DataType &value) {
+    void publish(const std::string &topic, const DataType &value, SendType type) {
         std::lock_guard<std::mutex> lk(mtx);
 
-        func_buffer.publish(topic, value);
+        func_buffer.publish(topic, value, type);
 
         cond.notify_one();
     }
@@ -100,10 +100,10 @@ public:
     /**
      * シリアライズされたメッセージを出版する
      */
-    void publish_serialized(const std::string &topic, const std::string &msg,int sender_id) {
-        std::lock_guard<std::mutex> lk(mtx);
+    void publish_serialized(const std::string &topic, const std::string &msg, SendType type, int sender_id) {
+        std::lock_guard < std::mutex > lk(mtx);
 
-        func_buffer.publish_serialized(topic, msg,sender_id);
+        func_buffer.publish_serialized(topic, msg, type, sender_id);
 
         cond.notify_one();
     }
@@ -114,11 +114,11 @@ public:
      * 購読を開始した時点で、最新のメッセージが一つ受信される。
      */
     template<class ClassType>
-    int subscribe_serialized(void(ClassType::*func_ptr)(const std::string&,const std::string&), ClassType *caller, size_t max_queue_size = 0,int sender_id = -1) {
+    int subscribe_serialized(void(ClassType::*func_ptr)(const std::string&,const std::string&), ClassType *caller, size_t max_queue_size = 0,int except_sender = NO_EXCEPT) {
         std::lock_guard<std::mutex> lk(mtx);
         auto functional = std::bind(func_ptr, caller, std::placeholders::_1, std::placeholders::_2);
         cond.notify_one();
-        return func_buffer.subscribe_serialized(functional,sender_id);
+        return func_buffer.subscribe_serialized(functional,max_queue_size,except_sender);
     }
 
 
@@ -148,7 +148,7 @@ private:
         while (1) {
             std::unique_lock<std::mutex> lk(mtx);
             if (processing) { //処理中であれば、少し待って、様子を見に行く。
-                cond.wait_for(lk, std::chrono::milliseconds(100));
+                cond.wait_for(lk, std::chrono::milliseconds(1));
             } else {
                 cond.wait(lk);
             }

@@ -19,8 +19,9 @@ class TopicFuncPairList {
      */
     struct FuncSerializedData{
         std::function<void(std::string, std::string)> func;
-        int sender_id; //!< 送信してきた相手に、再度送信するのを防ぐためのID
-        unsigned int handler; //!< 関数を停止したりするためのハンドラ
+        int except_sender = 0; //!< 送信してきた相手に、再度送信するのを防ぐためのID
+        unsigned int handler = 0; //!< 関数を停止したりするためのハンドラ
+        size_t max_queue_size = 0;
     };
 
 public:
@@ -78,12 +79,12 @@ public:
     /**
      * シリアライザ付きのコールバック関数を登録する
      */
-    int subscribe_serialized(std::function<void(const std::string&, const std::string&)> func, int sender_id) {
-        FuncSerializedData func_info { func, sender_id, ++cur_handler };
+    int subscribe_serialized(std::function<void(const std::string&, const std::string&)> func, size_t max_queue_size, int except_sender) {
+        FuncSerializedData func_info { func, except_sender, ++cur_handler, max_queue_size };
         generalized_funcs.push_back(func_info);
         for (auto topic_func : topic_funcs) {
             auto functional = std::bind(func_info.func, topic_func.first, std::placeholders::_1);
-            topic_func.second->subscribe_serialized(functional, func_info.sender_id, func_info.handler);
+            topic_func.second->subscribe_serialized(functional, func_info.except_sender, func_info.handler ,max_queue_size);
         }
         return func_info.handler;
     }
@@ -116,21 +117,21 @@ public:
      * データを更新する
      */
     template<class DataType>
-    void publish(const std::string &topic, const DataType &data) {
+    void publish(const std::string &topic, const DataType &data, SendType type) {
         CallbackFuncs<void, DataType> *func = createOrGetFunc<DataType>(topic);
         if (func) {
-            func->publish(data);
+            func->publish(data, type, NO_EXCEPT);
         }
     }
 
-    void publish_serialized(const std::string &topic, const std::string &msg,int sender_id) {
+    void publish_serialized(const std::string &topic, const std::string &msg, SendType type, int sender_id) {
         if (topic_funcs.count(topic) != 0) {
-            topic_funcs[topic]->publish_serialized(msg,sender_id);
+            topic_funcs[topic]->publish_serialized(msg, type, sender_id);
         }
     }
 
     /**
-     * コールバック関数を、最大一回実行する。
+     * 各トピックのコールバック関数を、最大一回実行する。
      *
      */
     bool callOnce() {
@@ -151,7 +152,7 @@ private:
             topic_funcs.emplace(topic, func);
             for (auto &gfunc : generalized_funcs) {
                 auto functional = std::bind(gfunc.func, topic, std::placeholders::_1);
-                func->subscribe_serialized(functional, gfunc.sender_id, gfunc.handler);
+                func->subscribe_serialized(functional, gfunc.except_sender, gfunc.handler, gfunc.max_queue_size);
             }
         } else {
             func = cast<void, DataType>(topic_funcs[topic]);

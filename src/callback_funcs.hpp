@@ -17,11 +17,13 @@
 
 namespace pubsub {
 
+
 template<class ReturnType, class DataType>
 class CallbackFuncs: public CallbackFuncsBase {
     struct MsgType{
-        DataType data;
-        int sender_id;
+        DataType data; //!< データ本体
+        int sender_id; //!< メッセージの送信者
+        SendType type;
     };
 
     struct FuncInfo {
@@ -29,25 +31,9 @@ class CallbackFuncs: public CallbackFuncsBase {
         QFuture<ReturnType> future; //!< コールバック実行結果取得
         unsigned long msg_idx = 0;  //!< 次に送信するメッセージのインデックス番号
         size_t max_sque_size = 0;   //!< コールバックメッセージキューの最大サイズ 0だと無限サイズ
-        unsigned int handler = 0; //!< コールバック関数を特定するためのID
-        bool active = true;
+        unsigned int handler = 0;   //!< コールバック関数を特定するためのID
+        bool active = true;         //!< コールバックが有効かどうか
     };
-    SerializerHolderBase<DataType> *serializer = nullptr;
-    unsigned int cur_handler_id = 0;
-
-
-    /** データ形式によらないコールバック関数型
-     *
-     */
-    struct FuncInfo_generalized {
-        std::function<void(const std::string&)> func;  //!< コールバック関数
-        int sender_id = -1;
-        unsigned int handler;
-    };
-    std::vector<FuncInfo_generalized> funcs_generalized;
-
-    unsigned int handler_max = std::numeric_limits<unsigned int>::max()/2;
-    unsigned int serialized_func_handler_max = std::numeric_limits<unsigned int>::max();
 
 public:
     CallbackFuncs(size_t max_que_size = 0) :
@@ -55,9 +41,11 @@ public:
     }
 
     ~CallbackFuncs(){
-
+        std::lock_guard<std::mutex> lk(mtx);
         for (auto &func : funcs) {
-            func.future.waitForFinished();
+            if (func.future.isRunning()) {
+                func.future.waitForFinished();
+            }
         }
 
         if(serializer){
@@ -86,7 +74,9 @@ public:
         if(itr == funcs.end()){
             return;
         }
-
+        if (itr->future.isRunning()) {
+            itr->future.waitForFinished();
+        }
         funcs.erase(itr);
     }
 
@@ -126,17 +116,21 @@ public:
     }
 
 
-    void subscribe_serialized(std::function<void(const std::string&)> func, int sender_id, unsigned int handler) override {
+    void subscribe_serialized(std::function<void(const std::string&)> func, int except_sender, unsigned int handler, size_t max_queue_size) override {
         std::lock_guard<std::mutex> lk(mtx);
-        size_t max_que_size = 0;
         auto lambda = [=](MsgType &msg) {
-            if (!serializer || msg.sender_id == sender_id) {
+            if (!serializer || msg.type == LOCAL || (except_sender != NO_EXCEPT && msg.sender_id == except_sender)) {
                 return;
             }
             std::string data = serializer->serialize(msg.data);
             func(data);
         };
-        FuncInfo info { lambda, QFuture<ReturnType>(), msg_que.size() - 1, max_que_size, handler_max + handler };
+
+        size_t msg_idx = msg_que.size();
+        if(msg_idx != 0){
+            msg_idx--;//すでにデータが入っている場合、最新の値を一つpublishする。
+        }
+        FuncInfo info { lambda, QFuture<ReturnType>(), msg_idx, max_queue_size, handler_max + handler };
         funcs.push_back(info);
 
         return;
@@ -160,12 +154,13 @@ public:
     /**
      * コールバックメッセージを保存する
      */
-    void publish(const DataType &data,int sender_id = -1) {
+    void publish(const DataType &data, SendType type, int sender_id) {
         std::lock_guard<std::mutex> lk(mtx);
 
         MsgType msg;
         msg.data = data;
         msg.sender_id = sender_id;
+        msg.type = type;
         msg_que.push_back(msg);
 
         for (size_t idx = 0; idx < oldest_idx_supposed_to_be_pub; ++idx) {
@@ -212,10 +207,10 @@ public:
     }
 
 
-    void publish_serialized(const std::string &msg,int sender_id){
+    void publish_serialized(const std::string &msg, SendType type, int sender_id) {
         if (serializer) {
             auto data = serializer->deserialize(msg);
-            publish(data,sender_id);
+            publish(data, type, sender_id);
         }
     }
 
@@ -290,6 +285,12 @@ private:
 private:
     std::mutex mtx;
     std::vector<FuncInfo> funcs;
+    SerializerHolderBase<DataType> *serializer = nullptr; //!< シリアライザ
+
+    unsigned int cur_handler_id = 0; //!< コールバックの関数のハンドラを割り振るための値
+    unsigned int handler_max = std::numeric_limits<unsigned int>::max() / 2; //!<登録可能なコールバック関数のハンドラIDの最大値
+    unsigned int serialized_func_handler_max = std::numeric_limits<unsigned int>::max(); //!<シリアライザ付きの関数のハンドラIDの最大値。handler_max+1から番号を割り振る。
+
     std::deque<MsgType> msg_que; //!< メッセージ受信キュー
     size_t max_rque_size = 0; //!< メッセージ受信キューの最大サイズ 0だと、無限サイズ
     size_t oldest_idx_supposed_to_be_pub = 0; //!< 送信予定の最古のメッセージ

@@ -8,69 +8,72 @@ namespace pubsub {
 template<class DataType>
 class Publisher {
 public:
-    Publisher(std::string topic) :
-            topic(topic) {
+    Publisher(std::string topic, SendType type = GLOBAL) :
+            topic(topic), type(type) {
 
     }
 
     void publish(const DataType &value) {
-        Broker::getInstance().publish(topic, value);
+        Broker::getInstance().publish(topic, value, type);
     }
 
 private:
     std::string topic;
+    SendType type;
 };
 
-class Subscriber{
+class Subscriber {
 public:
-    Subscriber(Subscriber&& sub):topic(sub.topic),handler(sub.handler){
+    Subscriber(Subscriber &&sub) :
+            topic(sub.topic), handler(sub.handler) {
         sub.handler = 0;
     }
 
-    Subscriber(){
+    Subscriber() {
     }
 
-    ~Subscriber(){
+    ~Subscriber() {
         close();
     }
 
-    void close(){
-        if(handler == 0){
+    void close() {
+        if (handler == 0) {
             return;
         }
-        Broker::getInstance().close_subscribe(topic,handler);
+        Broker::getInstance().close_subscribe(topic, handler);
     }
 
-    void pause(){
-        if(handler == 0){
+    void pause() {
+        if (handler == 0) {
             return;
         }
-        Broker::getInstance().pause_subscribe(topic,handler);
+        Broker::getInstance().pause_subscribe(topic, handler);
     }
 
-    void resume(){
-        if(handler == 0){
+    void resume() {
+        if (handler == 0) {
             return;
         }
-        Broker::getInstance().resume_subscribe(topic,handler);
+        Broker::getInstance().resume_subscribe(topic, handler);
     }
 
-    pubsub::Subscriber& operator=(pubsub::Subscriber&&rhs){
+    pubsub::Subscriber& operator=(pubsub::Subscriber &&rhs) {
         topic = rhs.topic;
         handler = rhs.handler;
         rhs.handler = 0;
         return *this;
     }
 private:
-    Subscriber(std::string topic,int handler):topic(topic),handler(handler){
+    Subscriber(std::string topic, int handler) :
+            topic(topic), handler(handler) {
     }
 
-    Subscriber(const Subscriber& sub) = delete;
-    Subscriber(Subscriber& sub) = delete;
+    Subscriber(const Subscriber &sub) = delete;
+    Subscriber(Subscriber &sub) = delete;
 
 private:
     std::string topic;
-    unsigned int handler = 0;//!< 0は、無効値
+    unsigned int handler = 0; //!< 0は、無効値
     friend class api;
 };
 
@@ -91,28 +94,29 @@ private:
     ~api() = delete;
 };
 
-class Subscriber_serialized{
+class Subscriber_serialized {
 public:
-    Subscriber_serialized(){
+    Subscriber_serialized() {
 
     }
 
-    Subscriber_serialized(Subscriber_serialized&& sub):handler(sub.handler){
+    Subscriber_serialized(Subscriber_serialized &&sub) :
+            handler(sub.handler) {
         sub.handler = 0;
     }
 
-    pubsub::Subscriber_serialized& operator=(pubsub::Subscriber_serialized&&rhs){
+    pubsub::Subscriber_serialized& operator=(pubsub::Subscriber_serialized &&rhs) {
         handler = rhs.handler;
         rhs.handler = 0;
         return *this;
     }
 
-    ~Subscriber_serialized(){
+    ~Subscriber_serialized() {
         close();
     }
 
-    void close(){
-        if(handler == 0){
+    void close() {
+        if (handler == 0) {
             return;
         }
 
@@ -120,20 +124,19 @@ public:
     }
 
 private:
-    Subscriber_serialized(int handler):handler(handler){
+    Subscriber_serialized(int handler) :
+            handler(handler) {
     }
 private:
-    unsigned int handler = 0;//!< 0は、無効値
+    unsigned int handler = 0; //!< 0は、無効値
     friend class extra_api;
 };
 
-
 class extra_api {
 public:
-
     template<class ClassType>
-    static Subscriber_serialized subscribe_serialized(void (ClassType::*func_ptr)(const std::string&, const std::string&), ClassType *caller, size_t max_queue_size = 0, int sender_id = -1) {
-        int handler = Broker::getInstance().subscribe_serialized(func_ptr, caller, max_queue_size, sender_id);
+    static Subscriber_serialized subscribe_serialized(void (ClassType::*func_ptr)(const std::string&, const std::string&), ClassType *caller, size_t max_queue_size = 0, int except_sender = NO_EXCEPT) {
+        int handler = Broker::getInstance().subscribe_serialized(func_ptr, caller, max_queue_size, except_sender);
         return Subscriber_serialized(handler);
     }
 
@@ -142,8 +145,8 @@ public:
         Broker::getInstance().setSerializer<DataType, SerializerType>(topic);
     }
 
-    static void publish_serialized(std::string topic, const std::string &msg, int sender_id) {
-        Broker::getInstance().publish_serialized(topic, msg, sender_id);
+    static void publish_serialized(std::string topic, const std::string &msg, int sender_id, SendType type = GLOBAL) {
+        Broker::getInstance().publish_serialized(topic, msg, type, sender_id);
     }
 private:
     extra_api() = delete;
